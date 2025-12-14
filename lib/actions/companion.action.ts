@@ -1,7 +1,6 @@
 'use server';
 
-
-import { auth } from "@clerk/nextjs/server";
+import {auth} from "@clerk/nextjs/server";
 import {createSupabaseClient} from "@/lib/supabase";
 import { revalidatePath } from "next/cache";
 
@@ -14,7 +13,7 @@ export const createCompanion = async (formData: CreateCompanion) => {
         .insert({...formData, author })
         .select();
 
-        if(error || !data) throw new Error(error?.message || 'Failed to create a companion');
+    if(error || !data) throw new Error(error?.message || 'Failed to create a companion');
 
     return data[0];
 }
@@ -35,11 +34,20 @@ export const getAllCompanions = async ({ limit = 10, page = 1, subject, topic }:
 
     query = query.range((page - 1) * limit, page * limit - 1);
 
-    const { data: companions, error } = await query;
+    try {
+        const { data: companions, error } = await query;
 
-    if(error) throw new Error(error.message);
+        if(error) throw new Error(error.message);
 
-    return companions;
+        const uniqueCompanions = companions.filter((companion, index, self) =>
+            index === self.findIndex(c => c.id === companion.id)
+        );
+
+        return uniqueCompanions;
+    } catch (err) {
+        console.error('Fetch error in getAllCompanions:', err);
+        throw new Error('Failed to fetch companions. Check network or Supabase config.');
+    }
 }
 
 export const getCompanion = async (id: string) => {
@@ -54,7 +62,6 @@ export const getCompanion = async (id: string) => {
 
     return data[0];
 }
-
 
 export const addToSessionHistory = async (companionId: string) => {
     const { userId } = await auth();
@@ -180,9 +187,7 @@ export const getBookmarkedCompanions = async (userId: string) => {
     .from("bookmarks")
     .select(`companions:companion_id (*)`) // Notice the (*) to get all the companion data
     .eq("user_id", userId);
-  if (error) {
-    throw new Error(error.message);
-  }
+  if (error) throw new Error(error.message);
   // We don't need the bookmarks data, so we return only the companions
   return data.map(({ companions }) => companions);
 };
