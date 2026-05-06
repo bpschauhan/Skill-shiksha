@@ -1,43 +1,59 @@
 'use server';
 
 import {auth} from "@clerk/nextjs/server";
-import {createSupabaseClient} from "@/lib/supabase";
+import {getSqlClient} from "@/lib/db";
 import { revalidatePath } from "next/cache";
+
+const normalizeFilter = (value?: string | string[]) => {
+    const filter = Array.isArray(value) ? value[0] : value;
+    return filter?.trim() || null;
+}
 
 export const createCompanion = async (formData: CreateCompanion) => {
     const { userId: author } = await auth();
-    const supabase = createSupabaseClient();
+    const sql = getSqlClient();
 
-    const { data, error } = await supabase
-        .from('companions')
-        .insert({...formData, author })
-        .select();
+    const data = await sql`
+        INSERT INTO companions (name, subject, topic, voice, style, duration, author)
+        VALUES (
+            ${formData.name},
+            ${formData.subject},
+            ${formData.topic},
+            ${formData.voice},
+            ${formData.style},
+            ${formData.duration},
+            ${author}
+        )
+        RETURNING *
+    ` as Companion[];
 
-    if(error || !data) throw new Error(error?.message || 'Failed to create a companion');
+    if(!data[0]) throw new Error('Failed to create a companion');
 
-    return data[0];
+    return data[0] as Companion;
 }
 
 export const getAllCompanions = async ({ limit = 10, page = 1, subject, topic }: GetAllCompanions) => {
-    const supabase = createSupabaseClient();
-
-    let query = supabase.from('companions').select();
-
-    if(subject && topic) {
-        query = query.ilike('subject', `%${subject}%`)
-            .or(`topic.ilike.%${topic}%,name.ilike.%${topic}%`)
-    } else if(subject) {
-        query = query.ilike('subject', `%${subject}%`)
-    } else if(topic) {
-        query = query.or(`topic.ilike.%${topic}%,name.ilike.%${topic}%`)
-    }
-
-    query = query.range((page - 1) * limit, page * limit - 1);
+    const sql = getSqlClient();
+    const subjectFilter = normalizeFilter(subject);
+    const topicFilter = normalizeFilter(topic);
+    const topicPattern = topicFilter ? `%${topicFilter}%` : null;
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50));
+    const safeOffset = Math.max(0, ((Number(page) || 1) - 1) * safeLimit);
 
     try {
-        const { data: companions, error } = await query;
-
-        if(error) throw new Error(error.message);
+        const companions = await sql`
+            SELECT *
+            FROM companions
+            WHERE (${subjectFilter}::text IS NULL OR subject = ${subjectFilter})
+              AND (
+                ${topicPattern}::text IS NULL
+                OR topic ILIKE ${topicPattern}
+                OR name ILIKE ${topicPattern}
+              )
+            ORDER BY created_at DESC
+            LIMIT ${safeLimit}
+            OFFSET ${safeOffset}
+        ` as Companion[];
 
         const uniqueCompanions = companions.filter((companion, index, self) =>
             index === self.findIndex(c => c.id === companion.id)
@@ -46,79 +62,84 @@ export const getAllCompanions = async ({ limit = 10, page = 1, subject, topic }:
         return uniqueCompanions;
     } catch (err) {
         console.error('Fetch error in getAllCompanions:', err);
-        throw new Error('Failed to fetch companions. Check network or Supabase config.');
+        throw new Error('Failed to fetch companions. Check network or database config.');
     }
 }
 
 export const getCompanion = async (id: string) => {
-    const supabase = createSupabaseClient();
+    const sql = getSqlClient();
 
-    const { data, error } = await supabase
-        .from('companions')
-        .select()
-        .eq('id', id);
+    const data = await sql`
+        SELECT *
+        FROM companions
+        WHERE id = ${id}
+        LIMIT 1
+    ` as Companion[];
 
-    if(error) return console.log(error);
-
-    return data[0];
+    return data[0] as Companion | undefined;
 }
 
 export const addToSessionHistory = async (companionId: string) => {
     const { userId } = await auth();
-    const supabase = createSupabaseClient();
-    const { data, error } = await supabase.from('session_history')
-        .insert({
-            companion_id: companionId,
-            user_id: userId,
-        })
+    if (!userId) return;
+    const sql = getSqlClient();
 
-    if(error) throw new Error(error.message);
+    const data = await sql`
+        INSERT INTO session_history (companion_id, user_id)
+        VALUES (${companionId}, ${userId})
+        RETURNING *
+    ` as SessionHistory[];
 
     return data;
 }
 
 export const getRecentSessions = async (limit = 10) => {
-    const supabase = createSupabaseClient();
-    const { data, error } = await supabase
-        .from('session_history')
-        .select(`companions:companion_id (*)`)
-        .order('created_at', { ascending: false })
-        .limit(limit)
+    const sql = getSqlClient();
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50));
 
-    if(error) throw new Error(error.message);
+    const data = await sql`
+        SELECT c.*
+        FROM session_history sh
+        JOIN companions c ON c.id = sh.companion_id
+        ORDER BY sh.created_at DESC
+        LIMIT ${safeLimit}
+    ` as Companion[];
 
-    return data.map(({ companions }) => companions);
+    return data;
 }
 
 export const getUserSessions = async (userId: string, limit = 10) => {
-    const supabase = createSupabaseClient();
-    const { data, error } = await supabase
-        .from('session_history')
-        .select(`companions:companion_id (*)`)
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(limit)
+    const sql = getSqlClient();
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50));
 
-    if(error) throw new Error(error.message);
+    const data = await sql`
+        SELECT c.*
+        FROM session_history sh
+        JOIN companions c ON c.id = sh.companion_id
+        WHERE sh.user_id = ${userId}
+        ORDER BY sh.created_at DESC
+        LIMIT ${safeLimit}
+    ` as Companion[];
 
-    return data.map(({ companions }) => companions);
+    return data;
 }
 
 export const getUserCompanions = async (userId: string) => {
-    const supabase = createSupabaseClient();
-    const { data, error } = await supabase
-        .from('companions')
-        .select()
-        .eq('author', userId)
+    const sql = getSqlClient();
 
-    if(error) throw new Error(error.message);
+    const data = await sql`
+        SELECT *
+        FROM companions
+        WHERE author = ${userId}
+        ORDER BY created_at DESC
+    ` as Companion[];
 
     return data;
 }
 
 export const newCompanionPermissions = async () => {
     const { userId, has } = await auth();
-    const supabase = createSupabaseClient();
+    const sql = getSqlClient();
 
     let limit = 0;
 
@@ -130,34 +151,28 @@ export const newCompanionPermissions = async () => {
         limit = 10;
     }
 
-    const { data, error } = await supabase
-        .from('companions')
-        .select('id', { count: 'exact' })
-        .eq('author', userId)
+    const data = await sql`
+        SELECT COUNT(*)::int AS count
+        FROM companions
+        WHERE author = ${userId}
+    ` as { count: number }[];
 
-    if(error) throw new Error(error.message);
+    const companionCount = Number(data[0]?.count || 0);
 
-    const companionCount = data?.length;
-
-    if(companionCount >= limit) {
-        return false
-    } else {
-        return true;
-    }
+    return companionCount < limit;
 }
 
 // Bookmarks
 export const addBookmark = async (companionId: string, path: string) => {
   const { userId } = await auth();
   if (!userId) return;
-  const supabase = createSupabaseClient();
-  const { data, error } = await supabase.from("bookmarks").insert({
-    companion_id: companionId,
-    user_id: userId,
-  });
-  if (error) {
-    throw new Error(error.message);
-  }
+  const sql = getSqlClient();
+  const data = await sql`
+    INSERT INTO bookmarks (companion_id, user_id)
+    VALUES (${companionId}, ${userId})
+    ON CONFLICT (companion_id, user_id) DO NOTHING
+    RETURNING *
+  ` as Bookmark[];
   // Revalidate the path to force a re-render of the page
 
   revalidatePath(path);
@@ -167,27 +182,27 @@ export const addBookmark = async (companionId: string, path: string) => {
 export const removeBookmark = async (companionId: string, path: string) => {
   const { userId } = await auth();
   if (!userId) return;
-  const supabase = createSupabaseClient();
-  const { data, error } = await supabase
-    .from("bookmarks")
-    .delete()
-    .eq("companion_id", companionId)
-    .eq("user_id", userId);
-  if (error) {
-    throw new Error(error.message);
-  }
+  const sql = getSqlClient();
+  const data = await sql`
+    DELETE FROM bookmarks
+    WHERE companion_id = ${companionId}
+      AND user_id = ${userId}
+    RETURNING *
+  ` as Bookmark[];
   revalidatePath(path);
   return data;
 };
 
 // It's almost the same as getUserCompanions, but it's for the bookmarked companions
 export const getBookmarkedCompanions = async (userId: string) => {
-  const supabase = createSupabaseClient();
-  const { data, error } = await supabase
-    .from("bookmarks")
-    .select(`companions:companion_id (*)`) // Notice the (*) to get all the companion data
-    .eq("user_id", userId);
-  if (error) throw new Error(error.message);
+  const sql = getSqlClient();
+  const data = await sql`
+    SELECT c.*
+    FROM bookmarks b
+    JOIN companions c ON c.id = b.companion_id
+    WHERE b.user_id = ${userId}
+    ORDER BY b.created_at DESC
+  ` as Companion[];
   // We don't need the bookmarks data, so we return only the companions
-  return data.map(({ companions }) => companions);
+  return data;
 };

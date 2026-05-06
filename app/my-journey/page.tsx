@@ -19,9 +19,11 @@ const Profile = async () => {
 
   if (!user) redirect("/sign-in");
 
-  const companions = await getUserCompanions(user.id);
-  const sessionHistory = await getUserSessions(user.id);
-  const bookmarkedCompanions = await getBookmarkedCompanions(user.id);
+  const [companions, sessionHistory, bookmarkedCompanions] = await Promise.all([
+    getUserCompanions(user.id),
+    getUserSessions(user.id),
+    getBookmarkedCompanions(user.id),
+  ]);
 
   return (
     <main className="min-lg:w-3/4">

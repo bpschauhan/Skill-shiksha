@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import {
     Form,
     FormControl,
-    FormDescription,
     FormField,
     FormItem,
     FormLabel,
@@ -32,11 +31,14 @@ const formSchema = z.object({
     topic: z.string().min(1, { message: 'Topic is required.'}),
     voice: z.string().min(1, { message: 'Voice is required.'}),
     style: z.string().min(1, { message: 'Style is required.'}),
-    duration: z.preprocess((val) => Number(val), z.number().min(1, { message: 'Duration is required.' })),
+    duration: z.coerce.number().min(1, { message: 'Duration is required.' }),
 })
 
+type CompanionFormInput = z.input<typeof formSchema>;
+type CompanionFormOutput = z.output<typeof formSchema>;
+
 const CompanionForm = () => {
-    const form = useForm<z.infer<typeof formSchema>, any, z.infer<typeof formSchema>>({
+    const form = useForm<CompanionFormInput, undefined, CompanionFormOutput>({
         resolver: zodResolver(formSchema),
         defaultValues: {
             name: '',
@@ -48,7 +50,7 @@ const CompanionForm = () => {
         },
     })
 
-    const onSubmit = async (values: z.infer<typeof formSchema>) => {
+    const onSubmit = async (values: CompanionFormOutput) => {
         const companion = await createCompanion(values);
 
         if(companion) {
@@ -203,6 +205,7 @@ const CompanionForm = () => {
                                     type="number"
                                     placeholder="15"
                                     {...field}
+                                    value={String(field.value ?? '')}
                                     className="input"
                                 />
                             </FormControl>

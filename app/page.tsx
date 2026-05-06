@@ -2,13 +2,14 @@
 import CompanionCard from "@/components/CompanionCard";
 import CompanionsList from "@/components/companionsList";
 import CTA from "@/components/CTA";
-import {recentSessions} from "@/constants";
 import {getAllCompanions, getRecentSessions} from "@/lib/actions/companion.action";
 import {getSubjectColor} from "@/lib/utils";
 
 const Page = async () => {
-    const companions = await getAllCompanions({ limit: 3 });
-    const recentSessionsCompanions = await getRecentSessions(10);
+    const [companions, recentSessionsCompanions] = await Promise.all([
+        getAllCompanions({ limit: 3 }),
+        getRecentSessions(10),
+    ]);
 
   return (
     <main>
